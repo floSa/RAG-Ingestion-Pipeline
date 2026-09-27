@@ -83,8 +83,8 @@ recherche dense mais invisible en recherche lexicale. Vider
   `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d`.
 - **Python 3.12** et [`uv`](https://docs.astral.sh/uv/), pour la porte qualité
   seulement (`make all`). L'exploitation ne demande que Docker.
-- Les ressources mesurées (processeur, mémoire, disque) et le minimum
-  recommandé sont dans le [README](../README.md#ressources-nécessaires).
+- Les ressources minimales (processeur, mémoire, disque) sont dans
+  [`configuration_requise.md`](configuration_requise.md).
 
 ### 2.2 Le `.env` — toutes les variables
 
