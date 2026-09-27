@@ -303,19 +303,17 @@ dans le `.git/hooks` partagé un chemin d'interpréteur qui disparaîtra avec le
 worktree. Dans le clone principal, `make install` est le bon geste : il installe
 aussi les hooks git.
 
-Mesuré le 27 septembre 2026, sur `4ed61af` plus cette documentation :
-**rc=2**. `ruff check` propre, `mypy` « no issues found in **44** source
-files », **1 135 tests passés et 1 échec**, **35 mutations rejouées, 35
-rouges**, « arbre de travail intact », `ruff format --check` **87 fichiers déjà
-formatés** (`make mutations` et `make format-check` lancés à part, `make all`
-s'arrêtant au premier échec).
+Mesuré le 27 septembre 2026 : **rc=0**, `ruff check` propre, `mypy` « no
+issues found in **44** source files », **1 136 tests passés**, **35 mutations
+rejouées, 35 rouges**, « arbre de travail intact », `ruff format --check`
+**87 fichiers déjà formatés**.
 
-L'échec est
-`tests/unit/test_non_platitude.py::TestLeChapitrePlatEstReellementPlat::test_the_absence_of_h2_is_shared_by_three_chapters_so_it_explains_nothing` :
-il compte les chapitres HTML que le capteur retient dans `Datas/htms/` et en
-attend 22 ; le corpus versionné le 26 septembre 2026 en donne 57. Le test mesure
-le corpus, pas le code ([§7](#7-défauts-connus)). Le 25 septembre 2026, sur
-l'ancien corpus, `make all` rendait rc=0 avec 1 084 tests.
+Le corpus versionné le 26 septembre 2026 (`4ed61af`) avait rendu un test rouge,
+`test_non_platitude.py`, qui fige le nombre de chapitres HTML retenus par le
+capteur : 22 avant, 57 après (3 `Index.html` écartés sur 60 HTML), et 7 retenus
+sans `<h2>` au lieu de 3. Seules ces valeurs attendues ont changé ; le test
+s'appelle désormais
+`test_the_absence_of_h2_is_shared_by_seven_chapters_so_it_explains_nothing`.
 
 ### 4.2 Les huit comptes, et l'empreinte des clés
 
@@ -752,7 +750,7 @@ Un par ligne, avec sa référence au registre. **Aucun ne bloque l'ingestion.**
 | **les puces vides, laissées en l'état** | **202** `ListItem` vides. Six options ont été chiffrées ; l'option (a), ne rien changer, a été retenue le 24 septembre 2026. Leur texte est déjà entièrement dans le graphe, et ChromaDB ne le duplique pas | §4.37.g, §4.37.h |
 | **cinq points ouverts** | (a) une borne ChromaDB écrite **trop pessimiste** à deux endroits ; (b) deux tests (`B1`, `N1`) sans mutation qui les exerce ; (c) `A6-b` rouge pour une autre raison que son intitulé ; (d) la couverture de `chromadb.api.async_client` est **fortuite** ; (e) « 3 classes sur 20 noms publics » doit se lire « 3 sur 20 **classes** » | §4.41 |
 | **la CLI Dagster ne sait pas lire un curseur** | `dagster sensor cursor` n'offre que `--set` et `--delete`. Le marqueur de réingestion se pose par une commande officielle, mais celle-ci ne permet ni de vérifier ce qu'elle écrase, ni de constater qu'il a été consommé. La commande de lecture est au [§3.2](#32-réingérer--le-marqueur-sur-le-curseur) | §4.42.a |
-| **`make all` rouge depuis l'ajout du corpus du 26 septembre 2026** | un test de `test_non_platitude.py` attend 22 chapitres HTML retenus et en trouve 57 ([§4.1](#41-la-porte-qualité)). Le code n'est pas en cause ; le test fige un compte du corpus | à inscrire |
+| **une archive `.zip` dans le corpus, jamais ingérée** | `Datas/htms/The Statistics and Calculus with Python Workshop/The-Statistics-and-Calculus-with-Python-Workshop-master.zip` (20,7 Mo, 403 entrées : notebooks, scripts, CSV) n'est vue par aucun capteur : aucun motif de `sources.yaml` ne la désigne (`htms/**/*.html`, `pdfs/**/*.pdf`, `mds/**/*.md`), et elle n'apparaît pas non plus dans le journal des fichiers écartés. Les hooks ne l'ont pas arrêtée : `.pre-commit-config.yaml` exclut `^Datas/`, donc `check-added-large-files` | à décider |
 | **les 886 `FAILURE` de l'historique — expliqués et clos** | **tous** des `agent_reindex_job`, **une seule cause** : une `ReindexError` sur le `POST /reindex` vers un service d'agent absent du poste. **Aucun run d'ingestion n'a échoué.** Cinq fenêtres (68 / 498 / 9 / 59 / 252, somme **886**, seuil de découpe **300 s**), **aucun échec depuis le 3 septembre 2026, 08:37 UTC** | §4.43.a |
 
 **Défaut de conception corrigé** : une même variable configurait le serveur de
