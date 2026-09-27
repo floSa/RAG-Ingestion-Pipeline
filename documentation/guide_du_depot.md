@@ -196,7 +196,7 @@ docker compose logs -f docling-service
 | `Service Docling toujours pas pret` | Modèles ou schéma NebulaGraph pas encore initialisés | Attendre la fin du démarrage (`docker compose ps` : `healthy`) |
 | `nGQL rejete ...` | Écriture refusée par le graphe | Le run échoue volontairement plutôt que de laisser un graphe incomplet |
 
-**Débit et ressources.** Les durées d'ingestion par unité sont dans [orchestration.md](orchestration.md#combien-de-temps-prend-une-ingestion) ; la mémoire, le disque et le minimum recommandé dans le [README](../README.md#ressources-nécessaires). Pendant une ingestion continue, la mémoire de `docling-service` a été relevée toutes les 20 à 30 secondes pendant une demi-heure (111 mesures en régime) : **médiane 6,08 Gio, pic 6,43 Gio**, pour une limite de 10 Go (`docker-compose.yml`). L'essentiel est constitué des modèles, chargés une fois pour toutes. Une consommation qui grimpe au fil des livres est anormale : arrêter l'ingestion et le signaler plutôt que d'attendre le plafond.
+**Débit et ressources.** Les durées d'ingestion par unité sont dans [orchestration.md](orchestration.md#combien-de-temps-prend-une-ingestion) ; la mémoire, le disque et le minimum requis dans [configuration_requise.md](configuration_requise.md). Pendant une ingestion continue, la mémoire de `docling-service` a été relevée toutes les 20 à 30 secondes pendant une demi-heure (111 mesures en régime) : **médiane 6,08 Gio, pic 6,43 Gio**, pour une limite de 10 Go (`docker-compose.yml`). L'essentiel est constitué des modèles, chargés une fois pour toutes. Une consommation qui grimpe au fil des livres est anormale : arrêter l'ingestion et le signaler plutôt que d'attendre le plafond.
 
 ### Ce que la purge retire
 
