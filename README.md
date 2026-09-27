@@ -5,6 +5,8 @@ déposés dans `Datas/` et alimente trois stores, NebulaGraph (la structure),
 ChromaDB (les vecteurs) et SeaweedFS (les images). Les questions sont traitées
 par un autre dépôt, [`rag-agent-chat`](https://github.com/floSa/rag-agent-chat).
 
+![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white) ![uv](https://img.shields.io/badge/uv-package_manager-DE5FE9?logo=uv&logoColor=white) ![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white) ![Dagster](https://img.shields.io/badge/Dagster-1.13.16-4F43DD) ![Docling](https://img.shields.io/badge/Docling-2.117.0-6F42C1) ![FastAPI](https://img.shields.io/badge/FastAPI-0.141.1-009688?logo=fastapi&logoColor=white) ![PyMuPDF](https://img.shields.io/badge/PyMuPDF-1.28.0-8A2BE2) ![sentence-transformers](https://img.shields.io/badge/sentence--transformers-5.6.1-FF9D00) ![NebulaGraph](https://img.shields.io/badge/NebulaGraph-3.6.0-2C5BB4) ![ChromaDB](https://img.shields.io/badge/ChromaDB-0.6.3-FF6446) ![SeaweedFS](https://img.shields.io/badge/SeaweedFS-3.80-3B9E4A) ![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15-4169E1?logo=postgresql&logoColor=white)
+
 ## Architecture
 
 ```mermaid
