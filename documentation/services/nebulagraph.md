@@ -1,113 +1,85 @@
-# NebulaGraph (Graphe de connaissances)
+# NebulaGraph (graphe de connaissances)
 
-## Role
+## Rôle
 
-Base de donnees graphe distribuee stockant la hierarchie structurelle des documents :
-noeuds (Document, SectionHeader, Paragraph, Table, Picture...) et relations
-(PARENT_OF, LINKED_TO).
+Base de données graphe qui stocke la hiérarchie structurelle des documents. Modèle de données et fonctionnement : [graphe_connaissances.md](../graphe_connaissances.md). Contrat avec l'agent (tags, propriétés, types, arêtes) : [llm_integration_plan.md §4.2](../llm_integration_plan.md#42-nebulagraph--space-rag_space).
 
-## Containers
+Écrit par `docling-service` seul. Lu par `rag-agent-chat` (autre dépôt) et par les instruments `verify_data`, `verify_contract`, `index_report` ; vidé par `wipe_stores`.
 
-| Container       | Image                         | Port interne | Role                     |
-|-----------------|-------------------------------|--------------|--------------------------|
-| metad           | nebula-metad:v3.6.0           | 9559         | Service de metadonnees   |
-| storaged        | nebula-storaged:v3.6.0        | 9779         | Stockage distribue       |
-| graphd          | nebula-graphd:v3.6.0          | 9669         | Moteur de requete nGQL   |
-| nebula-studio   | nebula-graph-studio:v3.8.0    | 7001 (expose)| UI de visualisation      |
+## Conteneurs
 
-## Schema nGQL
+Quatre services de `docker-compose.yml`, tous sur le réseau `rag_network`, tous en `restart: unless-stopped`.
 
-Le schema est cree par le service Docling au demarrage (`init_schema()` dans
-`src/docling_service/nebula.py`). Les sites canoniques sont dans
-`src/docling_service/ngql.py` : `create_space_statement()`, `VID_MAX_BYTES`,
-`DOCUMENT_PROPERTIES`, `VERTEX_PROPERTIES` et `VERTEX_TYPES`. Le bloc ci-dessous
-les reproduit pour lecture.
+| Service | Image | Conteneur | Ports d'écoute | Publié sur l'hôte |
+|---|---|---|---|---|
+| `metad` | `vesoft/nebula-metad:v3.6.0` | `metad` | 9559, 19559 (HTTP) | non |
+| `storaged` | `vesoft/nebula-storaged:v3.6.0` | `storaged` | 9779, 19779 (HTTP) | non |
+| `graphd` | `vesoft/nebula-graphd:v3.6.0` | `graphd` | 9669 (nGQL), 19669 (HTTP) | non |
+| `nebula-studio` | `vesoft/nebula-graph-studio:v3.8.0` | nom attribué par Compose | 7001 | **7001** |
 
-**`vid_type` vaut 256 octets.** Les identifiants de document du corpus vont de
-**38** a **111** octets (mesure le 2 septembre 2026 sur le graphe vivant,
-`MATCH (v:Document) RETURN id(v)` : 23 identifiants, dont **16** au-dessus de
-64). Un space cree a 64 refuse ces documents : « *Storage Error: The VID must be
-a 64-bit integer or a string fitting space vertex id length limit* ». Nebula ne
-sait pas modifier un `vid_type` : le changer impose une purge complete des
-stores.
+Les ports viennent des options `--port` et `--ws_http_port` de chaque service. Seul `graphd` déclare `expose` ; seul `nebula-studio` publie un port.
+
+## Volumes
+
+- `metad` : `./Datas/database/nebula/meta:/data/meta`
+- `storaged` : `./Datas/database/nebula/storage:/data/storage`
+
+`graphd` et `nebula-studio` ne persistent rien.
+
+## Variables consommées
+
+Les conteneurs Nebula n'en lisent aucune : leur configuration tient dans leur `command`. Les variables sont celles des **clients** (`docling-service` et les instruments), lues par `src/docling_service/settings.py` :
+
+| Variable | Défaut du code |
+|---|---|
+| `NEBULA_HOST` | `graphd` |
+| `NEBULA_PORT` | `9669` |
+| `NEBULA_USER` | `root` |
+| `NEBULA_PASSWORD` | `nebula` (identifiant public d'un graphd de développement) |
+| `NEBULA_MAX_ATTEMPTS` / `NEBULA_RETRY_SECONDS` | `15` / `10` : ouverture du pool |
+| `NEBULA_SPACE_ATTEMPTS` | `12` : tentatives de `CREATE SPACE` |
+
+Rôle des quatre premières : [livraison.md §2.2](../livraison.md#22-le-env--toutes-les-variables).
+
+## Dépendances
+
+`storaged` dépend de `metad`, `graphd` de `storaged`. Ces `depends_on` sans condition fixent l'ordre de démarrage, pas l'attente de disponibilité. `docling-service` ne déclare aucun `depends_on` : il attend le graphd par ses propres tentatives (`NebulaWriter._connect`, puis `_create_space`).
+
+## Schéma nGQL
+
+`nebula.init_schema()` pose le schéma au démarrage de `docling-service`, dans un fil d'arrière-plan : `ADD HOSTS "storaged":9779` (échec toléré), `CREATE SPACE`, tags, arêtes, index `doc_index`, puis vérification des colonnes par `DESCRIBE TAG`. Un échec n'arrête pas le service : `/health` rend `graph_ready: false` et 503. Le site unique du schéma est `src/docling_service/ngql.py`.
 
 ```ngql
-CREATE SPACE rag_space(partition_num=10, replica_factor=1, vid_type=FIXED_STRING(256));
-
--- Tags (types de noeuds)
-CREATE TAG Document(filename string, type_file string, total_pages int,
-                    collection string, source_path string, language string,
-                    content_hash string);
-
--- Les onze tags d'element portent tous le meme schema, genere par
--- `tag_schema_statements()` a partir de `VERTEX_PROPERTIES` / `VERTEX_TYPES`.
-CREATE TAG SectionHeader(label string, page_no int, page_no_end int, text string, media_url string, object_key string, depth int);
-CREATE TAG Paragraph(label string, page_no int, page_no_end int, text string, media_url string, object_key string, depth int);
-CREATE TAG Table(label string, page_no int, page_no_end int, text string, media_url string, object_key string, depth int);
-CREATE TAG Picture(label string, page_no int, page_no_end int, text string, media_url string, object_key string, depth int);
--- ... (ListItem, Caption, Code, Formula, Footnote, PageHeader, PageFooter)
-
--- Migration : un ALTER par colonne et par tag, joue a chaque demarrage.
--- Sur un space deja peuple, le CREATE ci-dessus ne fait rien : c'est l'ALTER
--- qui ajoute les colonnes manquantes. Une colonne deja presente repond
--- « Existed! », ce qui est tolere. Le service constate ensuite le schema reel.
-ALTER TAG SectionHeader ADD (depth int);
-ALTER TAG SectionHeader ADD (page_no_end int);
--- ... (une ligne par colonne de VERTEX_PROPERTIES, pour chacun des onze tags)
-
--- Edges (relations)
-CREATE EDGE PARENT_OF(sequence int);
-CREATE EDGE LINKED_TO(relation string);
-
--- Index
-CREATE TAG INDEX doc_index ON Document(filename(20));
+CREATE SPACE IF NOT EXISTS rag_space(partition_num=10, replica_factor=1, vid_type=FIXED_STRING(256));
 ```
 
-### Evolution du schema
+**`vid_type` vaut 256 octets.** Les identifiants de document du corpus vont de **38** à **111** octets (mesure du 2 septembre 2026 sur le graphe en service, `MATCH (v:Document) RETURN id(v)` : 23 identifiants, dont **16** au-dessus de 64). Un space créé à 64 refuse ces documents. Nebula ne sait pas modifier un `vid_type` : le changer impose une purge complète des stores. Motif : [graphe_connaissances.md](../graphe_connaissances.md#longueur-des-identifiants--vid_type-à-256-octets).
 
-- `init_schema()` n'est joue qu'au demarrage du service. Apres une purge
-  (`python -m src.wipe_stores`), redemarrer `docling-service` avant toute
-  reingestion, sinon les INSERT visent un space ou des tags absents.
-- Une colonne supprimee ne revient jamais : Nebula garde l'historique de schema
-  d'un tag et refuse le re-ajout avec « Schema exisited before! » (mesure le
-  31 aout 2026). `ALTER TAG ... DROP` n'est donc pas un moyen de retour arriere.
-- Renommer une colonne suit la meme regle. `media_url` et `object_key` ont
-  remplace l'ancienne colonne d'adresse du media : `ALTER TAG ... ADD` pose les
-  deux nouvelles colonnes, mais l'ancienne reste sur le tag. Le seul etat propre
-  est le `DROP SPACE` de `python -m src.wipe_stores`, suivi du redemarrage qui
-  rejoue `init_schema()`.
+Contraintes d'exploitation :
 
-**Les deux colonnes de media.** `media_url` est l'adresse que l'agent affiche ;
-elle porte l'hote du stockage objet. `object_key` est la cle nue de l'objet dans
-le bucket : elle reste valable si l'hote change.
+- `init_schema()` n'est joué qu'au démarrage du service. Après une purge (`wipe_stores`), redémarrer `docling-service` avant toute réingestion, sinon les `INSERT` visent un space ou des tags absents : [livraison.md §3.3](../livraison.md#33-la-purge-et-le-redémarrage-qui-la-suit).
+- Une colonne supprimée ne revient jamais (« Schema exisited before! », mesuré le 31 août 2026) : `ALTER TAG … DROP` n'est pas un moyen de retour arrière. Détail : [graphe_connaissances.md](../graphe_connaissances.md#le-schéma-migre-en-place-pas-les-données).
+- `src/init_nebula.py` fait l'amorçage à la main sur une pile neuve (enregistrement du storaged, `CREATE SPACE`, `SHOW HOSTS`, `SHOW SPACES`), sans créer les tags. Forme de lancement : celle des instruments de [livraison.md §4](../livraison.md#4-vérifier), avec `python -m src.init_nebula`.
 
-## Variables d'environnement
+## Sonde de santé
 
-| Variable     | Description         | Defaut  |
-|--------------|---------------------|---------|
-| NEBULA_HOST  | Hostname graphd     | graphd  |
-| NEBULA_PORT  | Port graphd         | 9669    |
-| NEBULA_USER  | Utilisateur         | root    |
-| NEBULA_PASSWORD | Mot de passe     | nebula  |
+Aucune : `docker-compose.yml` ne déclare de `healthcheck` sur aucun des quatre services, qui n'affichent que `running`. L'état utile est celui de `docling-service` (`graph_ready` dans `/health`, voir [livraison.md §2.4](../livraison.md#24-la-santé-des-services)).
 
-## Dependances
+## Diagnostic
 
-`metad` -> `storaged` -> `graphd` (demarrage sequentiel)
-
-## Persistence
-
-- `./Datas/database/nebula/meta:/data/meta`
-- `./Datas/database/nebula/storage:/data/storage`
-
-## Healthcheck
-
-Depuis un conteneur du reseau `rag_network` (le port n'est pas publie sur l'hote) :
+Les images de la pile n'embarquent pas `curl` (`Dockerfile.docling`, `Dockerfile.dagster`). Interroger le port HTTP de `graphd` depuis `docling-service` :
 
 ```bash
-curl -s http://graphd:19669/status
+docker compose exec -T docling-service python -c \
+  "import urllib.request; print(urllib.request.urlopen('http://graphd:19669/status', timeout=10).read().decode())"
 ```
 
-## UI
+Dans Nebula Studio, `SHOW HOSTS;` doit montrer `storaged:9779` en ligne. Journaux :
 
-Nebula Studio accessible sur `http://localhost:7001`. Se connecter avec
-`graphd:9669`, user `root`, password `nebula`.
+```bash
+docker compose logs graphd --tail 50
+```
+
+## Interface
+
+Nebula Studio : `http://localhost:7001`. Se connecter à `graphd:9669` avec `NEBULA_USER` / `NEBULA_PASSWORD`. Sélectionner `rag_space` dans la liste déroulante plutôt que par `USE` ; requêtes types : [graphe_connaissances.md](../graphe_connaissances.md#lire-le-graphe--requêtes-types).

@@ -1,5 +1,7 @@
 # Première campagne de référence — 2 septembre 2026
 
+> **Archive datée, non réécrite.** Compte rendu de mesure du 2 septembre 2026. L'état en service est décrit par [`livraison.md`](../livraison.md).
+
 Ce fichier est le **compte rendu mesuré** de la première campagne de référence du
 pipeline d'ingestion : la réingestion complète du corpus par le code de `main`,
 le verdict des deux instruments dessus, et le jeu de trente questions écrit

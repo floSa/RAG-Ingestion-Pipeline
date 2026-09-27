@@ -1,17 +1,17 @@
-# Convention Prompts
+# Convention des prompts
 
-Ce dossier est reserve aux templates de prompts d'un agent RAG. Il ne contient
-aujourd'hui aucun template : la couche agent vit dans le projet
-`rag-agent-chat`, et ce pipeline n'appelle aucun LLM.
+Ce dossier est réservé aux modèles de prompts d'un agent RAG. Il ne contient
+aucun modèle : la couche agent vit dans le projet `rag-agent-chat`, et ce
+pipeline n'appelle aucun LLM. Aucun module de `src/` ne lit ce dossier.
 
-## Regles
+## Règles
 
 - Un fichier par prompt : `{nom_du_prompt}.txt` ou `.j2` (Jinja2).
-- Aucun prompt inline dans le code Python.
+- Aucun prompt en ligne dans le code Python.
 - Variables entre accolades : `{context}`, `{question}`, `{history}`.
-- Documenter les variables attendues en commentaire en tete de fichier.
+- Documenter les variables attendues en commentaire en tête de fichier.
 
-## Structure envisagee
+## Structure envisagée
 
 ```
 prompts/

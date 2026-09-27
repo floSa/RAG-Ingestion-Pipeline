@@ -1,5 +1,7 @@
 # Registre des axes d'amélioration
 
+> **Archive datée, non réécrite.** Registre du chantier, tenu jusqu'au 25 septembre 2026. L'état en service est décrit par [`livraison.md`](livraison.md).
+>
 > **MinIO est retiré depuis le 25 septembre 2026 ; les mentions qui suivent sont
 > historiques.** Le stockage d'objets est SeaweedFS, le dépôt ne nomme plus aucun
 > serveur — seule `S3_ENDPOINT` le désigne — et le contrat publie `media_url` et

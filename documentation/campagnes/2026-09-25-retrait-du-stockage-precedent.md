@@ -1,5 +1,7 @@
 # Retrait de MinIO — la procédure, et son compte rendu
 
+> **Archive datée, non réécrite.** Procédure et compte rendu du 25 septembre 2026. L'état en service est décrit par [`livraison.md`](../livraison.md).
+
 > **Ce document est une PROCÉDURE, puis un COMPTE RENDU.** Les §1 à §10 sont la
 > procédure, écrite le 25 septembre 2026 avant tout déploiement. **Elle a été
 > exécutée le même jour, entre 13:36 et 13:55 UTC** : le compte rendu, avec

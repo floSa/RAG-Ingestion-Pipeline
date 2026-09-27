@@ -1,54 +1,36 @@
-# Stockage et Recherche Vectorielle (ChromaDB)
+# Stockage et recherche vectorielle (ChromaDB)
 
 ## Présentation du service
 La base vectorielle **ChromaDB** porte la recherche sémantique du RAG. NebulaGraph conserve la structure du document et l'ordre des éléments ; ChromaDB retrouve les passages dont le sens est proche d'une question.
 
 Chaque chunk est représenté par un *embedding* calculé par `paraphrase-multilingual-MiniLM-L12-v2` : un vecteur de 384 dimensions. Deux textes de sens voisin ont des vecteurs proches.
 
-## Accès au service
-- **Type** : API HTTP de ChromaDB
-- **Adresse** : `chromadb:8000`, sur le réseau `rag_network` uniquement (le port n'est pas publié sur l'hôte)
-- Le client se connecte par la bibliothèque Python officielle : `chromadb.HttpClient`.
+Le client est la bibliothèque Python officielle, `chromadb.HttpClient`, sur `chromadb:8000` (réseau `rag_network` seulement). Conteneur, version, volume et diagnostic : [services/chromadb.md](services/chromadb.md). Contrat détaillé avec l'agent : [llm_integration_plan.md §4.1](llm_integration_plan.md#41-chromadb--collection-rag_documents).
 
 ## Structure et définition des données
 La collection utilisée est **`rag_documents`**.
 
-- **Identifiant du chunk** : l'identifiant cryptographique (Hash ID) de l'élément d'où part la lecture du chunk. Un élément réparti sur plusieurs chunks leur donne un suffixe : `023351d5f4#0`, `023351d5f4#1`… Un élément tenant en un seul chunk garde son identifiant nu. C'est une clause du contrat, et `verify_contract` la compte : **974 ids suffixés sur 4 365** (mesuré le 2 septembre 2026 sur l'index vivant). Ce suffixe ne protège pas de la duplication à la réingestion : c'est `extraction.extract` qui s'en charge, en purgeant le document par `source_path` avant de le réécrire (registre §4.2, §4.31.B3).
+- **Identifiant du chunk** : le hash de dix caractères hexadécimaux de l'élément d'où part la lecture du chunk. Un élément réparti sur plusieurs chunks leur donne un suffixe : `023351d5f4#0`, `023351d5f4#1`… Un élément tenant en un seul chunk garde son identifiant nu (`chunking.chunk_id`, seul site de cette forme). C'est une clause du contrat, et `verify_contract` compte les ids suffixés ([livraison.md §4.5](livraison.md#45-verify_contract--le-contrat-avec-lagent)). Ce suffixe ne protège pas de la duplication à la réingestion : c'est `extraction.extract` qui s'en charge, par `storage.forget_document`, qui purge le document par `source_path` avant de le réécrire (`vectors.delete_document`, registre §4.2, §4.31.B3).
 - **Embeddings** : représentation mathématique du texte du chunk, produite par `paraphrase-multilingual-MiniLM-L12-v2` (384 dimensions), encodée par lots. Le modèle est **multilingue** : une question française retrouve les passages anglais pertinents, et réciproquement.
 - **Documents** : le texte intégral du chunk. Le texte *stocké* n'est jamais tronqué ; le *vecteur* peut l'être, car le modèle tronque ce qui dépasse sa fenêtre. Le chiffre et ses deux causes sont documentés à un seul endroit, `vectors.get_chunker` dans `src/docling_service/vectors.py` (registre §3.4 bis).
 
-Un point important : **la collection ne contient pas un vecteur par élément du document, mais un vecteur par chunk**. Le découpage est confié à `HybridChunker`, le découpeur de Docling : il regroupe ce qui va ensemble en respectant la structure du document, et reçoit le tokenizer du modèle d'embedding. Tous les éléments restent en revanche dans NebulaGraph : la structure du document est intacte, et `/context/{element_id}` la reconstruit. Voir [extraction_donnees.md](extraction_donnees.md#ce-qui-part-dans-lindex-vectoriel).
+**La collection ne contient pas un vecteur par élément du document, mais un vecteur par chunk**. Le découpage est confié à `HybridChunker`, le découpeur de Docling : il regroupe ce qui va ensemble en respectant la structure du document, et reçoit le tokenizer du modèle d'embedding. Tous les éléments restent en revanche dans NebulaGraph : la structure du document est intacte, et l'agent la reconstruit par `/context/{element_id}`. Voir [extraction_donnees.md](extraction_donnees.md#ce-qui-part-dans-lindex-vectoriel).
 
-Les fragments isolés : `HybridChunker` fusionne par défaut les éléments voisins de même métadonnée (`merge_peers`). Ensuite, dans `vectors.build_chunks`, un chunk est **écarté** s'il n'a aucun caractère alphanumérique ou s'il est plus court que `MIN_CHUNK_CHARS`, **et seulement s'il est le seul chunk de son élément**. Une fenêtre du *milieu* d'un texte continu est conservée même courte : sinon, l'agent qui concatène les chunks d'un élément obtiendrait un texte troué (registre §4.28.a).
+Les fragments isolés : `HybridChunker` fusionne par défaut les éléments voisins de même métadonnée (`merge_peers`). Ensuite, dans `vectors.build_chunks`, un chunk est **écarté** s'il n'a aucun caractère alphanumérique ou s'il est plus court que `MIN_CHUNK_CHARS` (24 caractères par défaut, `settings.min_chunk_chars`), **et seulement s'il est le seul chunk de son élément**. Une fenêtre du *milieu* d'un texte continu est conservée même courte : sinon, l'agent qui concatène les chunks d'un élément obtiendrait un texte troué (registre §4.28.a).
 
 Le vecteur est par ailleurs calculé sur le texte **précédé du titre de sa section**, alors que le document stocké reste le texte brut. Le passage s'affiche donc tel quel côté agent, mais le vecteur porte son contexte.
 
-**Métadonnées** — définies par `ChunkMetadata` dans `src/pipeline/schemas.py`, qui est le contrat de référence avec `rag-agent-chat` :
+**Métadonnées** : 19 clés, définies par `ChunkMetadata` dans `src/pipeline/schemas.py`, qui est le contrat de référence avec `rag-agent-chat`. Leur rôle clé par clé est dans [llm_integration_plan.md §4.1](llm_integration_plan.md#41-chromadb--collection-rag_documents) ; elles se rangent en cinq familles :
 
-| Clé | Rôle |
-|---|---|
-| `element_id` | Hash 10 hexadécimaux de l'élément. **Toujours l'élément, jamais le chunk** : `rag-agent-chat` valide `/context/{element_id}` sur `^[a-f0-9]{10}$` |
-| `graph_node_id` | Clé de pivot vers NebulaGraph (même valeur) |
-| `filename` | Nom du fichier source — le **chapitre** |
-| `collection` | Dossier parent — l'**ouvrage** dont vient le chapitre |
-| `source_path` | Chemin complet relatif à `Datas/`, identité unique du document |
-| `label` | Tag Docling, pour filtrer par type (`table`, `formula`, `text`…) |
-| `page_no` | **Première** page du chunk, pour citer la référence à l'utilisateur |
-| `page_no_end` | **Dernière** page couverte. Égale à `page_no` sauf pour un élément que Docling a fusionné par-dessus une frontière de page — citer « page N » seule est alors inexact |
-| `media_url` | Adresse de l'image associée, le cas échéant. **Interne et authentifiée** : l'agent est le proxy, il ne la passe jamais à un navigateur |
-| `object_key` | La clé nue de ce même objet, celle passée à `put_object`. L'adresse porte l'hôte et devient fausse s'il change ; la clé reste valable |
-| `reference_id` | Section parente (ou `DOC`) |
-| `language` | Langue du document (`en`, `fr`…), vide si indéterminée. Voir plus bas |
-| `depth` | Profondeur dans la hiérarchie des titres. **Aucun plafond**, et **deux échelles s'y croisent** : c'est `label` qui dit laquelle. Définition de référence : `ChunkMetadata.depth` |
-| `section_title` | Titre de la section, exploitable pour l'affichage des citations |
-| `page_position` | Rang de l'élément dans sa page |
-| `ref_position` | Rang de l'élément sous son parent |
-| `chunk_index` / `chunk_count` | Position du chunk parmi les chunks de son élément, et leur nombre |
-| `block_size` | Nombre d'éléments du document fusionnés dans ce chunk |
+- **pivot vers le graphe** : `element_id` et `graph_node_id`, de même valeur, toujours le hash de l'élément et jamais l'id suffixé du chunk ;
+- **provenance** : `filename` (le chapitre), `collection` (l'ouvrage), `source_path` (identité du document), `language` ;
+- **position** : `label`, `page_no`, `page_no_end`, `reference_id`, `depth`, `section_title`, `page_position`, `ref_position` ;
+- **découpage** : `chunk_index`, `chunk_count`, `block_size` ;
+- **média** : `media_url` (adresse interne et authentifiée, que l'agent ne passe jamais à un navigateur) et `object_key` (la clé nue du même objet).
 
 ## Pourquoi un modèle d'embedding multilingue
 
-Le corpus mélange le français et l'anglais, et les questions arrivent dans l'une ou l'autre langue. L'ancien modèle, `all-MiniLM-L6-v2`, n'était entraîné que sur de l'anglais : il **classait par langue avant de classer par sens**.
+Les questions arrivent en français ou en anglais, et le corpus de référence sur lequel ce choix a été fait mêlait les deux langues (le corpus en service, lui, est entièrement anglais). L'ancien modèle, `all-MiniLM-L6-v2`, n'était entraîné que sur de l'anglais : il **classait par langue avant de classer par sens**.
 
 Mesure sur une question française, face à six passages :
 
@@ -78,7 +60,7 @@ Ce qui compte n'est pas la valeur absolue mais **l'écart entre les candidats**.
 
 ### Ce que ça impose à `rag-agent-chat`
 
-Le modèle se change par `EMBEDDING_MODEL_NAME` dans `.env`, mais **ce n'est pas une décision locale** : l'agent doit encoder ses questions avec le même modèle, sans quoi les vecteurs ne sont plus comparables et les réponses deviennent aberrantes **sans qu'aucune erreur n'apparaisse**. La dimension étant identique (384), c'est le seul changement à faire de son côté.
+L'agent doit encoder ses questions avec le même modèle, sans quoi les vecteurs ne sont plus comparables et les réponses deviennent aberrantes **sans qu'aucune erreur n'apparaisse**. Changer de modèle n'est donc pas une décision locale, ni un réglage : `EMBEDDING_MODEL_NAME` ne peut désigner que `CONTRACT_MODEL` (`src/docling_service/embedding.py`), et tout autre nom est refusé (voir ci-dessous). Un changement passe par cette constante, des deux côtés, et par une réingestion complète.
 
 ### Le service refuse de démarrer sur un autre modèle
 
@@ -88,16 +70,18 @@ Elle est muette pour une raison qui dicte la forme de la protection : `all-MiniL
 
 La dérive vient de l'environnement plutôt que du code. `DoclingSettings` dérive de `BaseSettings` : `EMBEDDING_MODEL_NAME` **écrase le défaut du code**. Un `.env` resté à `all-MiniLM-L6-v2`, non suivi par git, a déjà survécu à une réingestion complète avec le modèle multilingue.
 
-Deux contrôles, dans `src/docling_service/embedding.py`, tous deux du côté qui **produit** les vecteurs :
+Trois contrôles du côté qui **produit** les vecteurs, et un du côté qui les vérifie :
 
 | Contrôle | Où | Ce qu'il attrape |
 |---|---|---|
-| `verify_model_name()` | au démarrage du service, et avant chaque chargement de modèle | un `EMBEDDING_MODEL_NAME` hors contrat, qu'il vienne du code ou de l'environnement |
-| `verify_dimension()` | sur le modèle réellement chargé | un artefact qui ne correspond pas au nom sous lequel il a été chargé |
+| `embedding.verify_model_name()` | au démarrage du service (`lifespan`), et avant le chargement du modèle (`get_embedding_model`) | un `EMBEDDING_MODEL_NAME` hors contrat, qu'il vienne du code ou de l'environnement |
+| `embedding.verify_dimension()` | sur le modèle réellement chargé | un artefact qui ne correspond pas au nom sous lequel il a été chargé |
+| `vectors._inscrire_le_modele()` | à l'ouverture de la collection | une ingestion sous un modèle autre que celui inscrit dans les métadonnées de la collection (clé `embedding_model`) : un index mêlant deux modèles |
+| `embedding.index_model_gap()` | dans `verify_contract` | un index produit par un autre modèle que celui de la configuration, ou dont le modèle n'est pas inscrit |
 
-L'échec au démarrage est voulu : l'exception n'est pas rattrapée dans `lifespan`, et le conteneur s'arrête. Un service arrêté se voit ; un index encodé avec le mauvais modèle, non.
+L'échec au démarrage est voulu : l'exception n'est pas rattrapée dans `lifespan`, et le service ne démarre pas (`restart: always` le relance en boucle, sans jamais passer `healthy`). Un service qui ne démarre pas se voit ; un index encodé avec le mauvais modèle, non.
 
-Le défaut de `embedding_model_name` est la constante `CONTRACT_MODEL`, et non un littéral recopié : le code ne peut pas diverger du contrat. Seul l'environnement le peut, et le contrôle ci-dessus le couvre.
+Le défaut de `embedding_model_name` est la constante `CONTRACT_MODEL`, et non un littéral recopié : le code ne peut pas diverger du contrat. Seul l'environnement le peut, et les contrôles ci-dessus le couvrent.
 
 > Le préfixe d'organisation Hugging Face est accepté : `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` désigne le même artefact, et le refuser serait un faux positif.
 
@@ -118,11 +102,11 @@ La métadonnée `language` reste utile pour dire à l'utilisateur dans quelle la
 
 ### D'où vient la métadonnée `language`
 
-Détectée par comptage de mots-outils sur les 20 000 premiers caractères du document ([`language.py`](../src/docling_service/language.py)). À l'échelle d'un ouvrage, c'est très discriminant — ce qui serait fragile sur une seule phrase.
+Détectée par comptage de mots-outils sur un échantillon d'environ 20 000 caractères pris au début du document (`sample_text` puis `detect_language`, [`language.py`](../src/docling_service/language.py)). À l'échelle d'un ouvrage, c'est très discriminant, ce qui serait fragile sur une seule phrase.
 
-Sept langues reconnues : `en`, `fr`, `es`, `de`, `it`, `pt`, `nl`. La valeur est **vide** dès que le doute est permis : mieux vaut pas de réponse qu'une mauvaise. Les mots partagés entre plusieurs langues (`la`, `de`, `on`…) sont retirés des listes au chargement, sinon ils feraient pencher un score au hasard.
+Sept langues reconnues : `en`, `fr`, `es`, `de`, `it`, `pt`, `nl`. La valeur est **vide** dès que le doute est permis (moins de 30 mots, moins de 2 % de mots-outils reconnus, ou une avance de moins de 1,5 fois sur la langue suivante) : mieux vaut pas de réponse qu'une mauvaise. Les mots partagés entre plusieurs langues (`que`, `die`, `was`…) sont retirés des listes au chargement, sinon ils feraient pencher un score au hasard.
 
-Vérifié sur le corpus : 6 notes françaises et les chapitres anglais correctement identifiés, aucune erreur.
+Le corpus en service est entièrement anglais : tous ses chunks portent `en` ([livraison.md §4.6](livraison.md#46-index_report--lindex-vectoriel)).
 
 ## Commandes utiles
 - **Interroger la collection en Python**, depuis le conteneur `docling-service` (`docker compose exec docling-service python`). La question doit être encodée avec le modèle du contrat : `query_texts` utiliserait la fonction d'embedding par défaut de ChromaDB, qui n'est pas ce modèle.
@@ -140,10 +124,6 @@ Vérifié sur le corpus : 6 notes françaises et les chapitres anglais correctem
       n_results=3,
       where={"label": {"$in": ["text", "paragraph", "formula"]}},
   )
-  ```
-- **Journaux du service** :
-  ```bash
-  docker compose logs chromadb --tail 50
   ```
 
 ## Problèmes rencontrés et solutions
