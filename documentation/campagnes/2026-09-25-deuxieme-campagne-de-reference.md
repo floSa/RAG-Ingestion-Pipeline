@@ -1,5 +1,7 @@
 # Deuxième campagne de référence — 25 septembre 2026
 
+> **Archive datée, non réécrite.** Compte rendu de mesure du 25 septembre 2026. L'état en service est décrit par [`livraison.md`](../livraison.md).
+
 Ce fichier est le **compte rendu mesuré** de la deuxième campagne de référence du
 pipeline d'ingestion : purge des trois stores et du HTML nettoyé, réingestion
 complète du corpus par le code de `main` **sans aucun changement du code

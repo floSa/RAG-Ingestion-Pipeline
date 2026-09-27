@@ -11,6 +11,10 @@
 > marquées « non exécutée », avec leur raison, au
 > [§9](#9-chaque-commande-de-ce-document--exécutée-ou-non).
 >
+> **État en service : 23 documents ingérés au 25 septembre 2026.** Le corpus
+> versionné compte depuis le 26 septembre 2026 un second lot de 37 HTML et 1 PDF,
+> pas encore ingéré : les chiffres de ce document sont ceux des 23 documents.
+>
 > **Le stockage d'objets est SeaweedFS**, en service depuis le 25 septembre
 > 2026, 08:15 UTC. Le code ne nomme aucun serveur : il parle à une **passerelle
 > S3** par un client générique, et seule `S3_ENDPOINT` désigne le serveur. Lire
@@ -36,62 +40,30 @@ Il ne répond à aucune question. Ce rôle est celui de
 [`rag-agent-chat`](https://github.com/floSa/rag-agent-chat), un autre dépôt qui
 lit ces trois stores.
 
-### 1.1 Les services
+### 1.1 Les services et le chemin d'un document
 
-| Service | Rôle | Adresse interne |
-|---|---|---|
-| `docling-service` | FastAPI : extraction Docling, découpage, encodage (embeddings locaux, `SentenceTransformers`). **Seul service à écrire dans les trois stores** | `docling-service:8000` |
-| `dagster-webserver` / `dagster-daemon` | orchestration : capteurs, partitions, runs | `:3000` / — |
-| `postgres-dagster` | métadonnées Dagster : **curseurs des capteurs et historique des runs** | `postgres-dagster:5432` |
-| `graphd` + `metad` + `storaged` | NebulaGraph : la structure (`Document > Section > Text > Image/Table`) | `graphd:9669` |
-| `nebula-studio` | console du graphe | `:7001` |
-| `chromadb` | l'index vectoriel | `chromadb:8000` |
-| `seaweedfs` | le stockage d'objets, par sa passerelle S3 | `seaweedfs:8333` |
-
-Tout tourne en conteneurs, par Docker Compose, sur processeur.
-
-`POST /extract` met un document en file et rend un `job_id`. Le débit est
-limité à deux niveaux :
-
-- la file Dagster : `max_concurrent_runs: 2` dans `dagster.yaml` ;
-- le service Docling : un worker unique convertit **un document à la fois**.
+Dix services Docker Compose, sur processeur. Le schéma d'architecture est dans le
+[README](../README.md#architecture) ; la table des services (image, ports,
+rôle) dans [`architecture.md`](architecture.md#services-docker) ; le cadencement
+du débit (deux runs Dagster à la fois, un document à la fois dans
+`docling-service`) dans [`orchestration.md`](orchestration.md).
 
 Les sources sont déclarées dans `src/pipeline/sources.yaml`. Une fabrique
 génère pour chaque source ses partitions (une par fichier), son job et son
-capteur.
+capteur. Les HTML passent par un nettoyage universel ; les PDF et les Markdown
+partent directement à l'extraction.
 
-### 1.2 Le chemin d'un document
+### 1.2 Le contrat avec `rag-agent-chat`
 
-```mermaid
-flowchart LR
-    A["Datas/<br/>24 chapitres HTML<br/>+ 1 PDF"] --> S["Capteurs Dagster<br/>scan toutes les 30 s"]
-    S --> C["Nettoyage<br/>(HTML seulement)<br/>images extraites vers SeaweedFS"]
-    C --> D["Service Docling<br/>1 document à la fois"]
-    A --> D
-    D --> N["NebulaGraph<br/>15 196 sommets"]
-    D --> V["ChromaDB<br/>4 367 chunks"]
-    D --> M["SeaweedFS<br/>212 objets"]
-    D --> R["POST /reindex<br/>vers l'agent"]
-    N --> AG["rag-agent-chat<br/>autre dépôt"]
-    V --> AG
-    M --> AG
-```
+L'agent lit la collection ChromaDB `rag_documents`, le space NebulaGraph
+`rag_space` et le bucket `documents`, dont les objets sont désignés sur les
+sommets `Picture` et `Table` par `media_url` (adresse interne, authentifiée) et
+`object_key` (clé nue). Le contrat vivant, champ par champ, est au
+[§4 de `llm_integration_plan.md`](llm_integration_plan.md#4-modèle-de-données-contrat-dinterface) ;
+son origine datée est le §0 du [registre](axes_amelioration.md).
 
-Les HTML passent par un nettoyage universel. Les PDF et les Markdown partent
-directement à l'extraction.
-
-### 1.3 Le contrat avec `rag-agent-chat`
-
-La référence est le **§0 du [registre](axes_amelioration.md)**. Ce qui est
-publié, et que l'agent lit :
-
-| Ce qui est publié | Où | Ce qu'il faut en savoir |
-|---|---|---|
-| les chunks et leurs métadonnées | ChromaDB, collection `rag_documents` | `element_id` déterministe, 10 caractères hexadécimaux |
-| la structure du document | NebulaGraph, space `rag_space` | `depth` mélange deux échelles, `label` dit laquelle ; `sequence` repart à 0 par document |
-| l'adresse des images | propriété **`media_url`** des sommets `Picture` et `Table` | `http://<S3_ENDPOINT>/<bucket>/<clé>`. Adresse **interne et authentifiée** : un `GET` anonyme rend 403. L'agent sert de proxy ; l'adresse ne va jamais à un navigateur |
-| la **clé** de ces mêmes objets | propriété **`object_key`** des mêmes sommets | la clé nue, celle passée à `put_object`. L'adresse contient l'hôte et devient fausse si l'hôte change ; la clé identifie l'objet et reste valable |
-| le modèle d'embedding | `EMBEDDING_MODEL_NAME` | **doit être identique des deux côtés**. Un désaccord ne lève aucune erreur et rend des passages plausibles mais faux |
+`EMBEDDING_MODEL_NAME` doit être identique des deux côtés : un désaccord ne lève
+aucune erreur et rend des passages plausibles mais faux.
 
 **Hors des stores : `POST /reindex`.** En fin d'ingestion, quand plus aucun run
 n'est en cours, `agent_reindex_sensor` se déclenche et appelle
@@ -111,7 +83,8 @@ recherche dense mais invisible en recherche lexicale. Vider
   `docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d`.
 - **Python 3.12** et [`uv`](https://docs.astral.sh/uv/), pour la porte qualité
   seulement (`make all`). L'exploitation ne demande que Docker.
-- De la place disque : les stores vivent sous `Datas/database/`.
+- Les ressources mesurées (processeur, mémoire, disque) et le minimum
+  recommandé sont dans le [README](../README.md#ressources-nécessaires).
 
 ### 2.2 Le `.env` — toutes les variables
 
@@ -127,7 +100,7 @@ variable. Aucune valeur n'est écrite ici : `.env` n'est pas versionné.
 | `S3_ENDPOINT` | l'adresse du stockage d'objets : `seaweedfs:8333`. **Aucune valeur par défaut : sans elle, rien ne démarre** (voir le [§6.2](#62-ladresse-du-stockage-na-aucune-valeur-par-défaut)) |
 | `S3_BUCKET` | `documents` |
 | `S3_ACCESS_KEY` / `S3_SECRET_KEY` | ce que le **client** présente. **Ne pas les écrire dans le `.env`** : `docker-compose.yml` les dérive du jeu RW ci-dessous. Une seule valeur, écrite à un seul endroit |
-| `SEAWEEDFS_RW_ACCESS_KEY` | identité du **serveur**, jeu **écriture** : le pipeline (`docling-service`, `wipe_stores`). Actions `Admin, Read, Write, List, Tagging`. `docker-compose.yml` la passe en `S3_ACCESS_KEY` |
+| `SEAWEEDFS_RW_ACCESS_KEY` | identité du **serveur**, jeu **écriture** : le pipeline (`docling-service`, `dagster-webserver`, `dagster-daemon`, et `wipe_stores` qui tourne dans l'image de `docling-service`). Actions `Admin, Read, Write, List, Tagging`. `docker-compose.yml` la passe en `S3_ACCESS_KEY` à ces trois services |
 | `SEAWEEDFS_RW_SECRET_KEY` | idem |
 | `SEAWEEDFS_RO_ACCESS_KEY` | jeu **lecture seule** : `rag-agent-chat`. Actions `Read, List`, rien d'autre |
 | `SEAWEEDFS_RO_SECRET_KEY` | idem |
@@ -176,9 +149,8 @@ docker compose ps
 `healthy`. `docling-service` a un `start_period` de **600 s** : il charge son
 modèle. Les autres services n'affichent que `running`.
 
-Mesuré le 25 septembre 2026 à 09:00 UTC : onze services debout, `seaweedfs` et
-`docling-service` `healthy`. Ce compte incluait encore le stockage précédent,
-retiré l'après-midi même ; `docker-compose.yml` déclare désormais dix services.
+Mesuré le 27 septembre 2026 à 05:57 UTC : les dix services déclarés par
+`docker-compose.yml` sont debout, `seaweedfs` et `docling-service` `healthy`.
 
 La sonde de SeaweedFS vise **`http://seaweedfs:8333/healthz`**, pour deux
 raisons :
@@ -331,10 +303,17 @@ dans le `.git/hooks` partagé un chemin d'interpréteur qui disparaîtra avec le
 worktree. Dans le clone principal, `make install` est le bon geste : il installe
 aussi les hooks git.
 
-Mesuré le 25 septembre 2026 : **rc=0**, **1 084 tests passés**, `mypy`
-« no issues found in **43** source files », **35 mutations rejouées, 35
-rouges** (toutes détectées), « arbre de travail intact », `ruff format --check`
-**85 fichiers déjà formatés**.
+Mesuré le 27 septembre 2026 : **rc=0**, `ruff check` propre, `mypy` « no
+issues found in **44** source files », **1 136 tests passés**, **35 mutations
+rejouées, 35 rouges**, « arbre de travail intact », `ruff format --check`
+**87 fichiers déjà formatés**.
+
+Le corpus versionné le 26 septembre 2026 (`4ed61af`) avait rendu un test rouge,
+`test_non_platitude.py`, qui fige le nombre de chapitres HTML retenus par le
+capteur : 22 avant, 57 après (3 `Index.html` écartés sur 60 HTML), et 7 retenus
+sans `<h2>` au lieu de 3. Seules ces valeurs attendues ont changé ; le test
+s'appelle désormais
+`test_the_absence_of_h2_is_shared_by_seven_chapters_so_it_explains_nothing`.
 
 ### 4.2 Les huit comptes, et l'empreinte des clés
 
@@ -432,16 +411,24 @@ arrive chez l'agent sous la forme d'un **404 silencieux**. L'écran affiche
 « image absente », et le corpus semble simplement incomplet. Un jeu
 d'identifiants mal configuré ne se voit donc pas à l'usage.
 
+Le script tourne dans un conteneur sur `rag_network` : `seaweedfs:8333` ne se
+résout nulle part ailleurs. Les quatre `ESSAI_S3_*_KEY` sont exportées au
+préalable dans le shell ; `-e NOM`, sans valeur, les transmet sans les écrire
+sur la ligne de commande, où elles seraient lisibles dans la table des
+processus.
+
 ```bash
-ESSAI_S3_ENDPOINT=seaweedfs:8333 \
-ESSAI_S3_BUCKET=<un bucket d'essai, JAMAIS documents> \
-ESSAI_S3_RW_ACCESS_KEY=… ESSAI_S3_RW_SECRET_KEY=… \
-ESSAI_S3_RO_ACCESS_KEY=… ESSAI_S3_RO_SECRET_KEY=… \
-python scripts/campagne/essayer-la-passerelle-s3.py
+docker run --rm --network rag_network \
+  -e ESSAI_S3_ENDPOINT=seaweedfs:8333 \
+  -e ESSAI_S3_BUCKET=<un bucket d'essai, jamais documents> \
+  -e ESSAI_S3_RW_ACCESS_KEY -e ESSAI_S3_RW_SECRET_KEY \
+  -e ESSAI_S3_RO_ACCESS_KEY -e ESSAI_S3_RO_SECRET_KEY \
+  -v "$PWD":/w:ro -w /w python:3.12-slim \
+  sh -c "pip install -q minio==7.2.20 && python scripts/campagne/essayer-la-passerelle-s3.py"
 ```
 
-Les identifiants viennent de l'environnement, jamais de la ligne de commande :
-un secret passé en argument est lisible dans la table des processus.
+`minio==7.2.20` est la version épinglée par `pyproject.toml` et
+`src/docling_service/requirements.txt`.
 
 Code de sortie : `0` si les sept premiers critères passent, `1` dès qu'un seul
 échoue. **Contrôle négatif** : rejouer avec un jeu d'identifiants faux ; le
@@ -594,8 +581,8 @@ de l'agent, pas les 44 du jeu de questions de ce dépôt
 
 ## 5. Revenir en arrière
 
-**Le retour arrière repose sur le corpus, et sur rien d'autre.** `Datas/`
-contient les 25 fichiers sources, qui déterminent tout : les `element_id`
+**Le retour arrière repose sur le corpus, et sur rien d'autre.** Les 25 fichiers
+sources des stores en service (dans `Datas/`) déterminent tout : les `element_id`
 dérivent de leur contenu et de leur chemin, les 212 objets sont leurs images,
 les 4 367 chunks leur texte. **Une purge suivie d'une réingestion régénère les
 trois stores à l'identique** ; `comparer` contre l'instantané le vérifie
@@ -635,8 +622,8 @@ sont à **`RUNNING`**. Ils étaient à `DECLARED_IN_CODE` avant le changement de
 stockage.
 
 - `DECLARED_IN_CODE` : aucun état en base, le capteur suit le code. Le code
-  déclare `default_status=DefaultSensorStatus.RUNNING` (`factory.py:670` pour
-  les trois capteurs de fichiers, `reindex_job.py:320` pour
+  déclare `default_status=DefaultSensorStatus.RUNNING` (`factory.py:603` pour
+  les trois capteurs de fichiers, `reindex_job.py:301` pour
   `agent_reindex_sensor` ; ce sont les deux seules occurrences de
   `default_status` du dépôt).
 - `RUNNING` : un état est enregistré dans la base Dagster, et il prime sur le
@@ -720,11 +707,15 @@ faux le jeu de 30 questions.
 
 Mesuré le 25 septembre 2026 (registre §4.41) : **0** fichier du corpus n'a un
 `mtime` postérieur au 24 septembre 2026. Pour compter le corpus, écarter
-`.cleaned`, sinon la commande rend 47 au lieu de 25 :
+`.cleaned`, qui contient les copies nettoyées des HTML :
 
 ```bash
 find Datas -path 'Datas/.cleaned' -prune -o \( -name '*.pdf' -o -name '*.html' \) -print
 ```
+
+Le 25 septembre 2026, elle rendait 25 fichiers. Le corpus versionné depuis le
+26 septembre 2026 en compte 63 (`git ls-files Datas | wc -l`), dont 38 pas
+encore ingérés.
 
 ### 6.6 Après une purge, ne pas redémarrer l'agent
 
@@ -750,7 +741,7 @@ docker compose restart agent-api    # dans le depot rag-agent-chat, et seulement
 
 ## 7. Défauts connus
 
-Un par ligne, avec sa référence au registre. **Aucun n'est bloquant.**
+Un par ligne, avec sa référence au registre. **Aucun ne bloque l'ingestion.**
 
 | Défaut | Description | Référence |
 |---|---|---|
@@ -759,6 +750,7 @@ Un par ligne, avec sa référence au registre. **Aucun n'est bloquant.**
 | **les puces vides, laissées en l'état** | **202** `ListItem` vides. Six options ont été chiffrées ; l'option (a), ne rien changer, a été retenue le 24 septembre 2026. Leur texte est déjà entièrement dans le graphe, et ChromaDB ne le duplique pas | §4.37.g, §4.37.h |
 | **cinq points ouverts** | (a) une borne ChromaDB écrite **trop pessimiste** à deux endroits ; (b) deux tests (`B1`, `N1`) sans mutation qui les exerce ; (c) `A6-b` rouge pour une autre raison que son intitulé ; (d) la couverture de `chromadb.api.async_client` est **fortuite** ; (e) « 3 classes sur 20 noms publics » doit se lire « 3 sur 20 **classes** » | §4.41 |
 | **la CLI Dagster ne sait pas lire un curseur** | `dagster sensor cursor` n'offre que `--set` et `--delete`. Le marqueur de réingestion se pose par une commande officielle, mais celle-ci ne permet ni de vérifier ce qu'elle écrase, ni de constater qu'il a été consommé. La commande de lecture est au [§3.2](#32-réingérer--le-marqueur-sur-le-curseur) | §4.42.a |
+| **une archive `.zip` dans le corpus, jamais ingérée** | `Datas/htms/The Statistics and Calculus with Python Workshop/The-Statistics-and-Calculus-with-Python-Workshop-master.zip` (20,7 Mo, 403 entrées : notebooks, scripts, CSV) n'est vue par aucun capteur : aucun motif de `sources.yaml` ne la désigne (`htms/**/*.html`, `pdfs/**/*.pdf`, `mds/**/*.md`), et elle n'apparaît pas non plus dans le journal des fichiers écartés. Les hooks ne l'ont pas arrêtée : `.pre-commit-config.yaml` exclut `^Datas/`, donc `check-added-large-files` | à décider |
 | **les 886 `FAILURE` de l'historique — expliqués et clos** | **tous** des `agent_reindex_job`, **une seule cause** : une `ReindexError` sur le `POST /reindex` vers un service d'agent absent du poste. **Aucun run d'ingestion n'a échoué.** Cinq fenêtres (68 / 498 / 9 / 59 / 252, somme **886**, seuil de découpe **300 s**), **aucun échec depuis le 3 septembre 2026, 08:37 UTC** | §4.43.a |
 
 **Défaut de conception corrigé** : une même variable configurait le serveur de
@@ -810,7 +802,7 @@ concerné aussi, puisque son empreinte se calcule sur ce que publie le graphe.
 
 ### 8.3 La période d'observation du stockage d'objets
 
-**À décider** : ce qu'on observe. Rien de ce qui suit n'est mesuré : débit,
+**À décider** : ce qui est observé. Rien de ce qui suit n'est mesuré : débit,
 latence, tenue en charge, durabilité. Le volume a survécu à **une** recréation
 de conteneur ; rien n'a été mesuré sur un redémarrage de la machine, une coupure
 en cours d'écriture ou un disque plein. `-master.volumeSizeLimitMB=1024` et

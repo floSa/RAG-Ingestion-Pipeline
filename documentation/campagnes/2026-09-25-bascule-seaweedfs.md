@@ -1,5 +1,7 @@
 # Bascule de MinIO vers SeaweedFS — 25 septembre 2026
 
+> **Archive datée, non réécrite.** Compte rendu de la préparation de la bascule, 25 septembre 2026 ; la bascule a été exécutée le même jour. L'état en service est décrit par [`livraison.md`](../livraison.md).
+
 Ce fichier est le **compte rendu mesuré** de la préparation de la bascule du
 stockage objet du pipeline, de **MinIO** vers **SeaweedFS**. SeaweedFS est la
 solution **retenue** par le propriétaire du chantier : ce document ne compare

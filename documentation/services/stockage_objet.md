@@ -1,120 +1,77 @@
 # Stockage objet (passerelle S3)
 
-## Role
+## Rôle
 
-Stockage objet S3-compatible pour les medias extraits des documents (images
-croppees, tableaux en PNG). Leur adresse et leur cle sont referencees dans le
-graphe de connaissances et dans les metadonnees ChromaDB.
+Stockage S3 des médias extraits des documents : SeaweedFS, par sa passerelle S3.
+Fonctionnement (client, clés d'objet, `media_url` et `object_key`, choix) :
+[`stockage_objets.md`](../stockage_objets.md).
 
-Le serveur est SeaweedFS (depuis le 25 septembre 2026). Le code ne le nomme
-pas : il parle a une passerelle S3, et seule `S3_ENDPOINT` la designe.
+## Conteneur
 
-## Container
+- Service `seaweedfs`, image `chrislusf/seaweedfs:3.80`, `hostname: seaweedfs`.
+  Aucun `container_name` : nom attribué par Compose.
+- Port interne 8333 (passerelle S3, `expose`). Ni port publié, ni console : le
+  service n'est joignable que depuis `rag_network`.
+- Commande : `weed server -dir=/data -ip=seaweedfs -master.volumeSizeLimitMB=1024 -volume.max=0 -filer -s3 -s3.port=8333 -s3.config=/run/seaweedfs/s3.json`.
+- Politique de redémarrage : `unless-stopped`.
 
-- `seaweedfs` : image `chrislusf/seaweedfs:3.80`, port interne 8333 (passerelle
-  S3). Ni console, ni port publie : le service n'est joignable que depuis
-  `rag_network`.
+## Volumes
 
-La passerelle exige un fichier d'identites (`-s3.config`). Ce fichier est ecrit
-au demarrage dans un tmpfs du conteneur, a partir des variables du `.env`. Rien
-n'est monte depuis le depot, et aucune cle n'y est ecrite.
+- `./Datas/database/seaweedfs` monté sur `/data`
+- tmpfs `/run/seaweedfs` (mode `0700`) : reçoit le fichier d'identités
 
-## API
+Le fichier d'identités (`-s3.config`) est écrit au démarrage dans ce tmpfs, par
+un heredoc de l'`entrypoint`, à partir des variables du `.env`. Rien n'est monté
+depuis le dépôt, aucune clé n'y est écrite, et aucune ne passe en argument de
+commande.
 
-API S3 standard. Le depot la consomme par un client S3 generique (bibliotheque
-Python `minio`), construit a un seul endroit :
-`src/docling_service/images.py:build_client`. Aucun autre module de `src/` ne
-nomme la bibliotheque cliente.
+## Variables consommées
+
+Rôle et génération : [livraison.md §2.2](../livraison.md#22-le-env--toutes-les-variables).
+
+Côté serveur (`seaweedfs`), les identités :
+
+| Variables | Identité | Actions |
+|---|---|---|
+| `SEAWEEDFS_RW_ACCESS_KEY`, `SEAWEEDFS_RW_SECRET_KEY` | `pipeline` | `Admin`, `Read`, `Write`, `List`, `Tagging` |
+| `SEAWEEDFS_RO_ACCESS_KEY`, `SEAWEEDFS_RO_SECRET_KEY` | `agent` | `Read`, `List` |
+
+Côté clients (`docling-service`, `dagster-webserver`, `dagster-daemon`) :
+`S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY`. Les deux dernières
+ne sont pas dans le `.env` : `docker-compose.yml` les dérive du jeu RW
+([livraison.md §6.2](../livraison.md#62-ladresse-du-stockage-na-aucune-valeur-par-défaut)).
+Le jeu RO est celui de `rag-agent-chat`, hors de cette pile.
 
 ## Bucket
 
-- `documents` : bucket principal, cree au demarrage du service d'extraction s'il
-  n'existe pas.
-  - crops PDF : `images/{filename_stem}/{element_id}_{type}.png`
-  - images Markdown : `images/md/{doc_key}/{rang}_{nom}`
-  - images de captures HTML : `images/html/{doc_key}/img_{rang}.{ext}`
+`documents`, créé au démarrage de `docling-service` s'il n'existe pas. Forme des
+clés : [`stockage_objets.md`](../stockage_objets.md#qui-écrit-quoi).
 
-## Ce que le contrat publie
+## Dépendances
 
-Deux champs, sur les sommets visuels du graphe comme sur les chunks ChromaDB :
+Aucune. Aucun service ne le déclare en `depends_on` : `docling-service` attend
+le stockage au démarrage (`images.ensure_bucket`, 15 tentatives à 5 s).
 
-| Champ        | Ce que c'est                                                  |
-|--------------|---------------------------------------------------------------|
-| `media_url`  | `http://<S3_ENDPOINT>/<bucket>/<cle>`, en style chemin         |
-| `object_key` | la cle nue, celle passee a `put_object`, sans reencodage       |
+## Sonde de santé
 
-**L'adresse est interne et authentifiee, jamais publique.** Un `GET` anonyme y
-rend 403, y compris depuis un conteneur de `rag_network`. L'hote est un nom de
-service Docker qui ne se resout pas hors de ce reseau. `rag-agent-chat` sert de
-proxy : il lit l'objet avec son jeu d'identifiants en lecture seule et le
-re-sert. Il ne transmet jamais cette adresse a un navigateur.
-
-**La cle survit a l'adresse.** L'adresse porte l'hote, donc elle devient fausse
-quand le stockage change d'hote : c'est arrive pour 212 objets le 25 septembre
-2026. La cle est l'identite de l'objet. Un consommateur qui veut relire un
-objet, le compter ou le rapprocher d'un listing utilise `object_key` sans avoir
-a decomposer l'adresse.
-
-## Variables d'environnement
-
-Ce que le client presente :
-
-| Variable        | Description        | Defaut      |
-|-----------------|--------------------|-------------|
-| `S3_ENDPOINT`   | `hote:port`        | **aucun** (exige) |
-| `S3_BUCKET`     | Nom du bucket      | `documents` |
-| `S3_ACCESS_KEY` | Cle d'acces        | **aucun** (exige) |
-| `S3_SECRET_KEY` | Cle secrete        | **aucun** (exige) |
-
-**Sans `S3_ENDPOINT` ni identifiants, les reglages refusent de se construire**,
-avec un message qui nomme la variable manquante (`src/reglages_s3.py`). Le
-refus a lieu avant la construction de tout client. C'est voulu :
-`python -m src.wipe_stores` lit ces memes reglages et vide le bucket qu'ils
-designent. Une adresse par defaut lui ferait purger un autre stockage que
-celui de la pile en rendant compte d'une purge reussie.
-
-`S3_ACCESS_KEY` et `S3_SECRET_KEY` ne sont pas ecrites dans le `.env` :
-`docker-compose.yml` les derive du jeu RW ci-dessous, pour `docling-service`,
-`dagster-webserver` et `dagster-daemon`. Une seule valeur, deux noms, un seul
-endroit qui la porte.
-
-Les identites du serveur :
-
-| Variable                  | Droits                                 |
-|---------------------------|----------------------------------------|
-| `SEAWEEDFS_RW_ACCESS_KEY` | `Admin`, `Read`, `Write`, `List`, `Tagging` |
-| `SEAWEEDFS_RW_SECRET_KEY` | idem                                   |
-| `SEAWEEDFS_RO_ACCESS_KEY` | `Read`, `List`                         |
-| `SEAWEEDFS_RO_SECRET_KEY` | idem                                   |
-
-**Deux jeux aux droits distincts.** Le pipeline ecrit (`make_bucket` exige
-`Admin`) ; `rag-agent-chat` ne fait que lire. Avec un seul jeu partage, tout
-lecteur pourrait effacer le corpus d'images.
-
-Un refus se presente au client comme un 403, et l'agent le rend en 404
-silencieux : ces droits ne se controlent pas a l'ecran. Ils se controlent par
-appel direct avec `scripts/campagne/essayer-la-passerelle-s3.py`, qui fait,
-pour chaque critere et chaque jeu, l'appel que le pipeline ou l'agent ferait
-(mode d'emploi dans l'en-tete du script).
-
-## Dependances
-
-Aucune (service autonome).
-
-## Persistence
-
-Volume : `./Datas/database/seaweedfs:/data`
+`wget -q -O /dev/null http://seaweedfs:8333/healthz`, toutes les 15 s (délai
+10 s, 10 essais, `start_period` 60 s). `docker compose ps` doit afficher
+`healthy`. Pourquoi `seaweedfs` et non `localhost`, `/healthz` et non `/` :
+[livraison.md §2.4](../livraison.md#24-la-santé-des-services).
 
 ## Diagnostic
 
 ```bash
 docker compose logs seaweedfs --tail 50
-docker compose exec docling-service python -m src.verify_data
+docker compose run --rm --no-deps -T -e PYTHONPATH=/app -w /app \
+  docling-service python -m src.verify_data
 ```
 
-`verify_data` affiche l'adresse qu'il interroge a cote du compte d'objets.
+`verify_data` affiche l'adresse qu'il interroge (`S3_ENDPOINT`) à côté du compte
+d'objets du bucket. Comptes attendus :
+[livraison.md §4.2](../livraison.md#42-les-huit-comptes-et-lempreinte-des-clés).
 
-La sonde du conteneur interroge `http://seaweedfs:8333/healthz`. Pas `localhost` :
-`-ip=seaweedfs` fait ecouter le serveur sur cette seule adresse. Pas `/` : la
-racine S3 non authentifiee rend un 403, ce qui est le comportement attendu mais
-ferait echouer la sonde en permanence.
+Un refus S3 (403) arrive chez l'agent en 404 silencieux : les droits des deux
+jeux ne se contrôlent pas à l'écran, mais par appel direct avec
+`scripts/campagne/essayer-la-passerelle-s3.py`
+([livraison.md §4.4](../livraison.md#44-la-passerelle-s3-et-ses-huit-critères)).

@@ -8,12 +8,13 @@ imbrique ses titres » (registre, constat 3.2). Il couvre deux cas reels :
   rend 8 titres, tous de rang 0 : son graphe est reellement plat. Un test qui ne
   couvrirait que le premier cas lirait cette platitude comme un defaut.
 
-La cause de cette platitude n'est pas l'absence de <h2> : trois des 22 chapitres
-retenus n'en ont aucun (mesure), et les deux `Preface.html` s'imbriquent quand
-meme (`{0: 9, 1: 4}` et `{0: 8, 1: 4}` sur le graphe vivant). La propriete qui
-discrimine est qu'aucun titre n'est rendu sous le niveau de tete (titres rendus
-= <h1>). Sur ce chapitre, la seule balise de titre sous <h1> est la legende de
-sa figure, que Docling classe `caption` et non titre.
+La cause de cette platitude n'est pas l'absence de <h2> : sept des 57 chapitres
+retenus n'en ont aucun (mesure du 27 septembre 2026), et les deux
+`Preface.html` s'imbriquent quand meme (`{0: 9, 1: 4}` et `{0: 8, 1: 4}` sur le
+graphe vivant). La propriete qui discrimine est qu'aucun titre n'est rendu sous
+le niveau de tete (titres rendus = <h1>). Sur ce chapitre, la seule balise de
+titre sous <h1> est la legende de sa figure, que Docling classe `caption` et non
+titre.
 
 Portee. Les tests rejouent le code de rang sur des arbres Docling captures
 depuis les captures HTML reelles et versionnees, et non sur un arbre fabrique a
@@ -243,7 +244,7 @@ class TestUnChapitreImbriqueNEstPasPlat:
         assert imbriques > len(rangs) - imbriques
 
     def test_the_root_headings_match_the_h1_tags_of_the_source(self, capture):
-        """Invariant verifie sur les 22 chapitres retenus du corpus.
+        """Invariant verifie sur les 22 chapitres retenus du corpus d'avant le 26 septembre 2026.
 
         Il relie la sortie du code de rang a une propriete du HTML d'entree que
         personne ne calcule : le nombre de titres de rang 0 egale le nombre de
@@ -270,7 +271,7 @@ class TestLeChapitrePlatEstReellementPlat:
         comme la preuve que le code echoue a imbriquer ; en realite, il n'y a
         rien a imbriquer.
 
-        L'absence de <h2> ne discrimine pas : trois des 22 chapitres retenus
+        L'absence de <h2> ne discrimine pas : sept des 57 chapitres retenus
         n'en ont aucun, et deux s'imbriquent (voir le test suivant). Ce qui
         discrimine : le nombre de titres rendus egale le nombre de <h1>. Le
         chapitre imbrique, lui, rend 41 titres pour 5 <h1>.
@@ -283,23 +284,25 @@ class TestLeChapitrePlatEstReellementPlat:
         assert len(_rangs(capture["imbrique"])) == 41
         assert Counter(_rangs(capture["imbrique"]))[0] == 5
 
-    def test_the_absence_of_h2_is_shared_by_three_chapters_so_it_explains_nothing(self, capture):
-        """Trois chapitres retenus n'ont aucun <h2> : ce critere n'explique rien.
+    def test_the_absence_of_h2_is_shared_by_seven_chapters_so_it_explains_nothing(self, capture):
+        """Sept chapitres retenus n'ont aucun <h2> : ce critere n'explique rien.
 
-        Mesure sur les 22 chapitres que le capteur retient reellement, et non
-        sur une liste ecrite a la main.
+        Mesure sur les 57 chapitres que le capteur retient reellement, et non
+        sur une liste ecrite a la main. Le corpus ajoute le 26 septembre 2026
+        (4ed61af) a fait passer ces comptes de 22 et 3 a 57 et 7.
 
         Le test ne verifie pas que les deux Prefaces s'imbriquent : il faudrait
         la conversion Docling, exclue de `make test` (voir la docstring du
         module). Cette mesure figure au registre §3.2, avec sa commande. Il
         suffit ici d'etablir que l'absence de <h2> est partagee.
 
-        Cout mesure : +0,86 s pour lire les balises des 22 chapitres.
+        Cout mesure le 31 aout 2026 : +0,86 s pour lire les balises des
+        22 chapitres d'alors.
         """
         racine = RACINE / "Datas" / "htms"
         retenus = [f for f in sorted(racine.rglob("*.html")) if not is_front_back_matter(f.stem)]
-        assert len(retenus) == 22, (
-            f"{len(retenus)} chapitres retenus au lieu de 22 : le corpus ou le "
+        assert len(retenus) == 57, (
+            f"{len(retenus)} chapitres retenus au lieu de 57 : le corpus ou le "
             "capteur a change, et la mesure ci-dessous ne porte plus"
         )
         sans_h2 = [
@@ -309,16 +312,16 @@ class TestLeChapitrePlatEstReellementPlat:
                 "h2"
             )
         ]
-        assert len(sans_h2) == 3, (
-            f"{len(sans_h2)} chapitres retenus sans <h2> au lieu de 3 : {[f.name for f in sans_h2]}"
+        assert len(sans_h2) == 7, (
+            f"{len(sans_h2)} chapitres retenus sans <h2> au lieu de 7 : {[f.name for f in sans_h2]}"
         )
         plat = _fichier(capture["plat"])
         assert plat in sans_h2, (
-            "le chapitre plat doit faire partie des trois : c'est ce qui rend le "
+            "le chapitre plat doit faire partie des sept : c'est ce qui rend le "
             "contre-exemple pertinent"
         )
-        # Les deux autres ne sont pas le chapitre plat : c'est tout l'argument.
-        assert len([f for f in sans_h2 if f != plat]) == 2
+        # Les six autres ne sont pas le chapitre plat : c'est tout l'argument.
+        assert len([f for f in sans_h2 if f != plat]) == 6
 
     def test_the_only_heading_tag_below_h1_is_a_figure_caption(self, capture):
         """Cause mesuree de la platitude, sur ce chapitre seulement.

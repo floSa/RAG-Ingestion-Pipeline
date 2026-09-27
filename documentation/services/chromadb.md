@@ -1,82 +1,56 @@
-# ChromaDB (Base vectorielle)
+# ChromaDB (base vectorielle)
 
-## Role
+## Rôle
 
-Base de donnees vectorielle stockant les embeddings des elements textuels extraits
-des documents. Utilisee pour la recherche semantique.
+Base vectorielle qui stocke les chunks des documents et leurs embeddings, pour la recherche sémantique. Modèle de données, modèle d'embedding et découpage : [base_vectorielle.md](../base_vectorielle.md). Contrat avec l'agent (identifiants, 19 clés de métadonnées définies par `ChunkMetadata` dans `src/pipeline/schemas.py`) : [llm_integration_plan.md §4.1](../llm_integration_plan.md#41-chromadb--collection-rag_documents).
 
-## Container
+Écrite par `docling-service` seul (`src/docling_service/vectors.py`) ; le pipeline Dagster n'y touche pas. Lue par `rag-agent-chat` (autre dépôt) et par les instruments `verify_data`, `verify_contract`, `index_report` ; `wipe_stores` supprime la collection.
 
-- `chromadb` : image `chromadb/chroma:0.6.3`, port interne 8000
+## Conteneur
 
-Le client Python (`chromadb==0.6.3`, dans `src/docling_service/requirements.txt`)
-est tenu sur la meme version majeure que l'image serveur, alors que la branche
-1.x existe. Ce pin ne suit plus `rag-agent-chat`, passe de son cote en 1.5.9 :
-monter le 0.x vers le 1.x ici suppose de bouger le client et l'image ensemble,
-puis de verifier que les collections deja ecrites restent lisibles.
+| Service | Image | Conteneur | Port d'écoute | Publié sur l'hôte |
+|---|---|---|---|---|
+| `chromadb` | `chromadb/chroma:0.6.3` | nom attribué par Compose | 8000 (`expose`) | non |
 
-## API
+Réseau `rag_network`, `restart: unless-stopped`.
 
-API REST standard ChromaDB. Ecrite uniquement par le service Docling
-(`src/docling_service/vectors.py`) ; le pipeline Dagster n'y touche pas.
+Le client Python (`chromadb==0.6.3`, `src/docling_service/requirements.txt`) est tenu sur la même version que l'image serveur, alors que la branche 1.x existe. `rag-agent-chat` est passé de son côté en 1.5.9 : monter ici du 0.x au 1.x suppose de changer le client et l'image ensemble, puis de vérifier que les collections déjà écrites restent lisibles.
 
 ## Collection
 
-- `rag_documents` : collection principale
-  - **ids** : `element_id` (hash sha256[:10]), suffixe `#n` si le bloc a du
-    etre decoupe en plusieurs fenetres
-  - **embeddings** : vecteurs 384 dimensions (paraphrase-multilingual-MiniLM-L12-v2,
-    fenetre de **128** tokens), calcules sur le texte precede du titre de sa section
-  - **metadatas** : **19** cles, definies par `ChunkMetadata` dans
-    `src/pipeline/schemas.py`, qui est le contrat de reference. Leur role est
-    documente dans [base_vectorielle.md](../base_vectorielle.md) et dans
-    [llm_integration_plan.md](../llm_integration_plan.md). La liste n'est pas
-    recopiee ici : une liste recopiee diverge du contrat au premier ajout.
-  - **documents** : texte du chunk, integral
+Une seule collection, `rag_documents` (`vectors.COLLECTION_NAME`), créée au premier accès (`get_or_create_collection`).
 
-**Granularite** : un vecteur par **chunk**, pas par element. Le decoupage est
-confie a `HybridChunker` de Docling, qui regroupe ce qui va ensemble en
-respectant la **structure** du document.
+Ses métadonnées de collection portent la clé `embedding_model` : le modèle qui a produit ses vecteurs, inscrit à la première ouverture de la collection par le service (`vectors._inscrire_le_modele`). Une ingestion sous un autre modèle est refusée, et `verify_contract` affiche ce nom (ligne `modele des vecteurs`, [livraison.md §4.5](../livraison.md#45-verify_contract--le-contrat-avec-lagent)).
 
-Ce que la production ecarte, dans `vectors.build_chunks` : un chunk sans aucun
-caractere alphanumerique, ou plus court que `MIN_CHUNK_CHARS` — **et seulement
-s'il est le seul chunk de son element**. Une fenetre du milieu d'un texte
-continu est conservee meme courte, sans quoi l'agent concatenerait un texte
-troue (registre §4.28.a). Les elements ecartes de l'index restent presents dans
-NebulaGraph.
+## Volume
 
-Voir [extraction_donnees.md](../extraction_donnees.md#ce-qui-part-dans-lindex-vectoriel).
+`./Datas/database/chromadb:/chroma/chroma`
 
-### Fenetre du modele et troncature
+## Variables consommées
 
-La fenetre du modele du contrat vaut **128** tokens (mesure le 2 septembre 2026,
-`python -m src.index_report` : « limite : 128 tokens »). Ce n'est pas un
-reglage : elle est lue au runtime sur le modele lui-meme
-(`modele.max_seq_length`), dans `vectors.py` et `index_report.py`.
+Le conteneur n'en lit aucune. Les clients lisent `CHROMA_HOST` (défaut `chromadb`) et `CHROMA_PORT` (défaut `8000`) dans `src/docling_service/settings.py`, et `EMBEDDING_MODEL_NAME` pour le modèle. Rôle : [livraison.md §2.2](../livraison.md#22-le-env--toutes-les-variables).
 
-Le texte **stocke** est integral. Le **vecteur** ne l'est pas toujours : le
-modele tronque ce qui depasse la fenetre. Le chiffre et ses causes sont
-documentes a un seul endroit, `vectors.get_chunker`.
+## Dépendances
 
-## Variables d'environnement
+Aucune. `docling-service` ne déclare pas de `depends_on` vers `chromadb`.
 
-| Variable   | Description    | Defaut   |
-|------------|----------------|----------|
-| CHROMA_HOST | Hostname      | chromadb |
-| CHROMA_PORT | Port          | 8000     |
+## Sonde de santé
 
-## Dependances
+Aucune dans `docker-compose.yml` : le service n'affiche que `running`.
 
-Aucune (service autonome).
+## Diagnostic
 
-## Persistence
-
-Volume : `./Datas/database/chromadb:/chroma/chroma`
-
-## Healthcheck
-
-Depuis un conteneur du reseau `rag_network` (le port n'est pas publie sur l'hote) :
+Les images de la pile n'embarquent pas `curl` (`Dockerfile.docling`, `Dockerfile.dagster`). Interroger le battement de cœur depuis `docling-service` :
 
 ```bash
-curl -s http://chromadb:8000/api/v1/heartbeat
+docker compose exec -T docling-service python -c \
+  "import urllib.request; print(urllib.request.urlopen('http://chromadb:8000/api/v1/heartbeat', timeout=10).read().decode())"
+```
+
+Compter les chunks : `python -m src.verify_data` ; état de l'index : `python -m src.index_report`. Forme de lancement et valeurs attendues : [livraison.md §4](../livraison.md#4-vérifier).
+
+Journaux :
+
+```bash
+docker compose logs chromadb --tail 50
 ```
